@@ -1,6 +1,6 @@
+# Vajra Core ⚡
 ![Status](https://img.shields.io/badge/status-active-green)
 ![RISC-V](https://img.shields.io/badge/ISA-RV32I-blue)
-# Vajra Core ⚡
 
 A 32-bit pipelined RISC-V processor built from scratch in Verilog, capable of executing compiled C programs in a bare-metal environment.
 
