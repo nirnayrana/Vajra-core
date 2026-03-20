@@ -1,0 +1,5 @@
+build/
+*.vcd
+*.out
+*.elf
+*.hex
