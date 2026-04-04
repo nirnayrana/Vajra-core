@@ -59,19 +59,14 @@ end
 always @(posedge clk or posedge rst) begin
     if (rst)
         PC_F <= 0;
-
     else if (Stall_F)
-        PC_F <= PC_F;                // 🚨 HOLD ON STALL
-
+        PC_F <= PC_F;
     else if (PCSrc_E)
-        PC_F <= PC_Target_E;         // branch
-
-    else if (PCSrc_E_r)
-        PC_F <= PC_F;                // 🚨 HOLD AFTER BRANCH
-
+        PC_F <= PC_Target_E;
     else
         PC_F <= PC_F + 4;
 end
+
 reg        PCSrc_r;
 reg [31:0] PC_Target_r;
 
@@ -92,7 +87,7 @@ riscv_imem IMEM (
 reg [31:0] Instr_D, PC_D;
 
 always @(posedge clk or posedge rst) begin
-    if (rst || Flush_D || PCSrc_E) begin
+    if (rst || Flush_D) begin
         Instr_D <= 32'h00000013; // NOP
         PC_D <= 0;
     end else if (!Stall_D) begin
@@ -141,13 +136,14 @@ riscv_control CONTROL(
     .Branch(Branch_D),
     .ALUOp(ALUOp_D),
     .ALUSrc(ALUSrc_D),
-    .Jump(Jump_D)
+    .Jump(Jump_D),
+    .PCToSrcA(PCToSrcA_D)
 );
 
 // IMMEDIATE
 assign Imm_D =
     // I-type
-    (Instr_D[6:0] == 7'b0010011 || Instr_D[6:0] == 7'b0000011) ?
+    (Instr_D[6:0] == 7'b0010011 || Instr_D[6:0] == 7'b0000011 || Instr_D[6:0] == 7'b1100111) ?
         {{20{Instr_D[31]}}, Instr_D[31:20]} :
 
     // S-type
@@ -158,8 +154,8 @@ assign Imm_D =
     (Instr_D[6:0] == 7'b1100011) ?
         {{20{Instr_D[31]}}, Instr_D[7], Instr_D[30:25], Instr_D[11:8], 1'b0} :
 
-    // U-type (LUI) ✅🔥
-    (Instr_D[6:0] == 7'b0110111) ?
+    // U-type (LUI and AUIPC)
+    (Instr_D[6:0] == 7'b0110111 || Instr_D[6:0] == 7'b0010111) ?
         {Instr_D[31:12], 12'b0} :
 
     // J-type (JAL)
@@ -196,6 +192,7 @@ always @(posedge clk or posedge rst) begin
         ALUControl_E <= 0;
         RegWrite_E <= 0; MemtoReg_E <= 0; MemWrite_E <= 0;
         Branch_E <= 0; Jump_E <= 0; ALUSrc_E <= 0;
+        PCToSrcA_E <= 0;
     end else begin
         RD1_E <= RD1_D;
         RD2_E <= RD2_D;
@@ -212,6 +209,7 @@ always @(posedge clk or posedge rst) begin
         Branch_E <= Branch_D;
         Jump_E <= Jump_D;
         ALUSrc_E <= ALUSrc_D;
+        PCToSrcA_E <= PCToSrcA_D;
     end
 end
 
@@ -240,7 +238,14 @@ end
 // EXECUTE
 ////////////////////////////////////////////////////////////
 wire [31:0] PCPlus4_E = PC_E + 4;
+
+// PCToSrcA_D: decoded from control unit for AUIPC/JAL
+wire PCToSrcA_D;
+// Latch through ID/EX register
+reg PCToSrcA_E;
+
 wire [31:0] SrcA_E =
+    PCToSrcA_E          ? PC_E :
     (ForwardA == 2'b10) ? ALUResult_M :
     (ForwardA == 2'b01) ? Result_W :
     RD1_E;
@@ -276,8 +281,8 @@ wire LoadUseHazard = MemtoReg_E && ((Rd_E == Rs1_D) || (Rd_E == Rs2_D));
 assign Stall_F = LoadUseHazard | MemWait;
 assign Stall_D = LoadUseHazard | MemWait;
 
-assign Flush_D = PCSrc_E | PCSrc_E_r;
-assign Flush_E = PCSrc_E;
+assign Flush_D = PCSrc_E;
+assign Flush_E = PCSrc_E | LoadUseHazard;
 
 ////////////////////////////////////////////////////////////
 // EX / MEM
@@ -293,7 +298,7 @@ wire [31:0] WriteData_E =
     RD2_E;
 
 always @(posedge clk or posedge rst) begin
-    if (rst) begin
+    if (rst || LoadUseHazard) begin
         ALUResult_M <= 0;
         WriteData_M <= 0;
         Rd_M <= 0;
@@ -304,13 +309,13 @@ always @(posedge clk or posedge rst) begin
         Jump_M <= 0;
     end else if (!MemWait) begin
         ALUResult_M <= ALUResult_E;
-        WriteData_M <= WriteData_E;   // ✅ FIXED
+        WriteData_M <= WriteData_E;
         Rd_M <= Rd_E;
         RegWrite_M <= RegWrite_E;
         MemtoReg_M <= MemtoReg_E;
         MemWrite_M <= MemWrite_E;
-        PCPlus4_M <= 0;
-        Jump_M <= 0;
+        PCPlus4_M <= PCPlus4_E;
+        Jump_M <= Jump_E;
     end
 end
 

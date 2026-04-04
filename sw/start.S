@@ -2,9 +2,9 @@
 .global _start
 
 _start:
-    # setup stack
-    li sp, 0x00000300
-    addi sp, sp, 0
+    # Stack pointer: top of RAM = 0x1000 + 2KB - 4 = 0x27FC
+    # Fixed: was 0x300 which is inside IMEM address space, not DMEM
+    li sp,  0x00002800
 
     # -------------------------
     # COPY .data (FLASH → RAM)
@@ -24,7 +24,7 @@ copy_data:
 done_copy:
 
     # -------------------------
-    # ZERO .bss (IMPORTANT)
+    # ZERO .bss
     # -------------------------
     la t0, _sbss
     la t1, _ebss
