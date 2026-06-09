@@ -64,6 +64,9 @@ Vajra Core is part of a broader initiative to build a full-stack open hardware c
 
 ---
 
+to start simulation
+vvp build/sim.out
+
 ## 👤 Author
 
 Nirnay Rana
