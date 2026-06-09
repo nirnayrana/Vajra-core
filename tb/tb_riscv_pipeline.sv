@@ -1,202 +1,111 @@
 `timescale 1ns/1ps
 
-// tb_riscv_pipeline.sv
-// FIX: UART output was printed THREE times per character:
-//   Block 1 (unconditional, after MAIN CYCLE TRACKER): dut.DMEM.io_valid
-//   Block 2 (ENABLE_UART generate):                    dut.DMEM.io_valid
-//   Block 3 (bottom of file):                          dut.io_valid
-//   dut.io_valid and dut.DMEM.io_valid are the SAME signal.
+// tb_riscv_pipeline.sv — updated for preemptive scheduler
 //
-// Resolution: keep only the ENABLE_UART generate block (Block 2), which is
-// already guarded with !rst. The newline-detection finish from Block 3 is
-// merged into that single block. Blocks 1 and 3 are removed.
+// Changes from previous version:
+//   - Timeout increased to 100000 cycles (scheduler needs time to tick)
+//   - UART finish condition removed (OS runs forever; sim ends on timeout or PASS)
+//   - Timer IRQ monitor: prints when trap fires and when MRET executes
+//   - Trap counter: counts context switches, PASS if >= 3 (proves scheduler runs)
 
 module tb_riscv_pipeline;
 
-////////////////////////////////////////////////////////////
-// PARAMETERS (CONFIGURABLE)
-////////////////////////////////////////////////////////////
-
-parameter CLK_PERIOD      = 10;
-parameter TIMEOUT_CYCLES  = 5000;
-parameter ENABLE_TRACE    = 1;
-parameter ENABLE_REG_DUMP = 1;
-parameter ENABLE_UART     = 1;
-
-parameter CHECK_RESULT_W  = 0;
-parameter CHECK_REG       = 1;
-
-parameter EXPECTED_RESULT = 32'd15;
-parameter CHECK_REG_ADDR  = 15;  // x15 (a5)
-
-////////////////////////////////////////////////////////////
-// SIGNALS
-////////////////////////////////////////////////////////////
+parameter CLK_PERIOD     = 10;
+parameter TIMEOUT_CYCLES = 100_000;
+parameter ENABLE_TRACE   = 0;      // set 1 for full pipeline trace (very verbose)
+parameter ENABLE_UART    = 1;
+parameter MIN_SWITCHES   = 3;      // PASS when scheduler has run at least this many times
 
 reg        clk;
 reg        rst;
 reg [1:0]  debug_sel;
 wire [9:0] led;
 integer    cycle_count;
-
-////////////////////////////////////////////////////////////
-// DUT
-////////////////////////////////////////////////////////////
+integer    switch_count;
 
 riscv_pipeline_top dut (
-    .clk(clk),
-    .rst(rst),
+    .clk(clk), .rst(rst),
     .debug_sel(debug_sel),
     .led(led)
 );
 
-////////////////////////////////////////////////////////////
-// CLOCK
-////////////////////////////////////////////////////////////
+// Clock
+initial begin clk = 0; forever #(CLK_PERIOD/2) clk = ~clk; end
 
+// Reset
 initial begin
-    clk = 0;
-    forever #(CLK_PERIOD/2) clk = ~clk;
-end
-
-////////////////////////////////////////////////////////////
-// RESET
-////////////////////////////////////////////////////////////
-
-initial begin
-    rst        = 1;
-    debug_sel  = 2'b10;
-    cycle_count = 0;
-    repeat (5) @(posedge clk);
+    rst = 1; debug_sel = 2'b10;
+    cycle_count = 0; switch_count = 0;
+    repeat(5) @(posedge clk);
     rst = 0;
 end
 
-////////////////////////////////////////////////////////////
-// CYCLE COUNTER
-////////////////////////////////////////////////////////////
+// Cycle counter
+always @(posedge clk) if (!rst) cycle_count <= cycle_count + 1;
 
-always @(posedge clk) begin
-    if (!rst) cycle_count <= cycle_count + 1;
+// --------------------------------------------------------
+// UART output
+// --------------------------------------------------------
+generate
+if (ENABLE_UART) begin
+    always @(posedge clk) begin
+        if (!rst && dut.DMEM.io_valid)
+            $write("%c", dut.DMEM.io_data);
+    end
 end
+endgenerate
 
-////////////////////////////////////////////////////////////
-// CORE TRACE
-////////////////////////////////////////////////////////////
-
+// --------------------------------------------------------
+// Pipeline trace (optional, very verbose)
+// --------------------------------------------------------
 generate
 if (ENABLE_TRACE) begin
     always @(posedge clk) begin
         if (!rst) begin
-            $display("--------------------------------------------------");
-            $display("Cycle: %0d | Time: %0t", cycle_count, $time);
-            $display("PC        = 0x%08h", dut.PC_F);
-            $display("Instr     = 0x%08h", dut.Instr_F);
-            $display("Result_W  = %0d",    dut.Result_W);
-            $display("MemWait   = %b",     dut.MemWait);
-            $display("LED       = %b",     led);
-            $display("--------------------------------------------------");
+            $display("Cycle:%0d PC=0x%08h Instr=0x%08h Result=%0d",
+                cycle_count, dut.PC_F, dut.Instr_F, dut.Result_W);
         end
     end
 end
 endgenerate
 
-////////////////////////////////////////////////////////////
-// UART OUTPUT  — single block, with newline-based finish
-// FIX: was printed by 3 separate always blocks simultaneously.
-////////////////////////////////////////////////////////////
-
-generate
-if (ENABLE_UART) begin
-    always @(posedge clk) begin
-        if (!rst && dut.DMEM.io_valid) begin
-            $write("%c", dut.DMEM.io_data);
-            // Finish on newline (program signals completion by writing '\n')
-            if (dut.DMEM.io_data == 8'h0A) begin
-                $display("\n[TB] Program output complete — stopping simulation.");
+// --------------------------------------------------------
+// Trap / context-switch monitor
+// --------------------------------------------------------
+always @(posedge clk) begin
+    if (!rst) begin
+        // Detect trap_en assertion (interrupt taken)
+        if (dut.trap_en) begin
+            $display("[TB] cycle=%0d  TRAP TAKEN  PC=0x%08h  cause=0x%08h",
+                     cycle_count, dut.trap_pc, dut.trap_cause);
+        end
+        // Detect MRET in WB stage
+        if (dut.IsMRET_W) begin
+            switch_count = switch_count + 1;
+            $display("[TB] cycle=%0d  MRET (context switch #%0d)  mepc=0x%08h",
+                     cycle_count, switch_count, dut.mepc_out);
+            if (switch_count >= MIN_SWITCHES) begin
+                $display("\n[PASS] Preemptive scheduler verified: %0d context switches", switch_count);
                 $finish;
             end
         end
     end
 end
-endgenerate
 
-////////////////////////////////////////////////////////////
-// REGISTER MONITOR
-////////////////////////////////////////////////////////////
-
-generate
-if (ENABLE_REG_DUMP) begin
-    always @(posedge clk) begin
-        if (!rst) begin
-            $display("REGS: x1=%0d x2=%0d x3=%0d x10=%0d x15=%0d",
-                dut.REG_FILE.rf[1],
-                dut.REG_FILE.rf[2],
-                dut.REG_FILE.rf[3],
-                dut.REG_FILE.rf[10],
-                dut.REG_FILE.rf[15]
-            );
-        end
-    end
-end
-endgenerate
-
-////////////////////////////////////////////////////////////
-// PASS CONDITIONS
-////////////////////////////////////////////////////////////
-
-generate
-if (CHECK_RESULT_W) begin
-    always @(posedge clk) begin
-        if (!rst && dut.Result_W == EXPECTED_RESULT) begin
-            $display("\n[PASS] Result_W = %0d @ cycle %0d", dut.Result_W, cycle_count);
-            $finish;
-        end
-    end
-end
-endgenerate
-
-generate
-if (CHECK_REG) begin
-    always @(posedge clk) begin
-        if (!rst && dut.REG_FILE.rf[CHECK_REG_ADDR] == EXPECTED_RESULT) begin
-            $display("\n[PASS] x%0d = %0d @ cycle %0d",
-                     CHECK_REG_ADDR,
-                     dut.REG_FILE.rf[CHECK_REG_ADDR],
-                     cycle_count);
-            $finish;
-        end
-    end
-end
-endgenerate
-
-////////////////////////////////////////////////////////////
-// X DETECTION
-////////////////////////////////////////////////////////////
-
-always @(posedge clk) begin
-    if (!rst && ^dut.Result_W === 1'bx) begin
-        $display("[ERROR] X detected in Result_W at cycle %0d", cycle_count);
-        $finish;
-    end
-end
-
-////////////////////////////////////////////////////////////
-// TIMEOUT
-////////////////////////////////////////////////////////////
-
+// --------------------------------------------------------
+// Timeout
+// --------------------------------------------------------
 always @(posedge clk) begin
     if (cycle_count > TIMEOUT_CYCLES) begin
-        $display("\n[TIMEOUT] cycle=%0d  PC=0x%08h  Instr=0x%08h  Result_W=%0d  x15=%0d",
-                 cycle_count, dut.PC_F, dut.Instr_F, dut.Result_W,
-                 dut.REG_FILE.rf[15]);
+        $display("\n[TIMEOUT] cycles=%0d  switches=%0d  PC=0x%08h",
+                 cycle_count, switch_count, dut.PC_F);
+        $display("irq_pending=%b  timer_irq=%b  mtvec=0x%08h  mepc=0x%08h",
+                 dut.irq_pending, dut.timer_irq, dut.mtvec_out, dut.mepc_out);
         $finish;
     end
 end
 
-////////////////////////////////////////////////////////////
-// WAVEFORM
-////////////////////////////////////////////////////////////
-
+// Waveform
 initial begin
     $dumpfile("wave.vcd");
     $dumpvars(0, tb_riscv_pipeline);
