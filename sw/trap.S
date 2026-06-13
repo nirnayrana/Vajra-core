@@ -81,7 +81,9 @@ trap_entry:
     // ------------------------------------------------------------------
     la   t0, current_task    // t0 = &current_task  (pointer to pointer)
     lw   t1, 0(t0)           // t1 = current_task   (the TCB pointer itself)
+    beqz t1, skip_save       // if current_task == NULL, skip saving
     sw   sp, 0(t1)           // current_task->sp = sp
+skip_save:
 
     // ------------------------------------------------------------------
     // 3. Call the C scheduler to pick the next task

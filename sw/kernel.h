@@ -14,12 +14,22 @@
 #define MAX_TASKS        4
 #define TASK_STACK_SIZE  256   // bytes per task stack
 
+//QEMU
+#ifdef QEMU
+  #define MTIME_BASE    0x0200bff8UL   // QEMU virt CLINT
+  #define MTIME_LO      (*(volatile uint32_t*)(MTIME_BASE + 0x00))
+  #define MTIME_HI      (*(volatile uint32_t*)(MTIME_BASE + 0x04))
+  #define MTIMECMP_LO   (*(volatile uint32_t*)(0x02004000UL))
+  #define MTIMECMP_HI   (*(volatile uint32_t*)(0x02004004UL))
+#else
 // MTIME peripheral base address (set in riscv_mtime.v / linker)
-#define MTIME_BASE       0x20000000UL
-#define MTIME_LO         (*(volatile uint32_t*)(MTIME_BASE + 0x00))
-#define MTIME_HI         (*(volatile uint32_t*)(MTIME_BASE + 0x04))
-#define MTIMECMP_LO      (*(volatile uint32_t*)(MTIME_BASE + 0x08))
-#define MTIMECMP_HI      (*(volatile uint32_t*)(MTIME_BASE + 0x0C))
+  #define MTIME_BASE    0x20000000UL
+  #define MTIME_LO      (*(volatile uint32_t*)(MTIME_BASE + 0x00))
+  #define MTIME_HI      (*(volatile uint32_t*)(MTIME_BASE + 0x04))
+  #define MTIMECMP_LO   (*(volatile uint32_t*)(MTIME_BASE + 0x08))
+  #define MTIMECMP_HI   (*(volatile uint32_t*)(MTIME_BASE + 0x0C))
+#endif
+
 
 // Timer tick = 1000 hardware cycles (matches TICK_CYCLES in riscv_mtime.v)
 #define TICK_INTERVAL    1000UL
@@ -66,3 +76,6 @@ void os_start(void);
 TCB *scheduler(void);
 
 #endif // KERNEL_H
+
+// TinyML inference task (defined in tinyml_layer.c)
+void tinyml_task(void);

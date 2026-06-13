@@ -6,7 +6,7 @@
 
 _start:
     // Stack pointer: top of 4KB RAM
-    li sp, 0x00002000
+    li sp, STACK_TOP
 
     // Copy .data (FLASH -> RAM)
     la t0, _sdata

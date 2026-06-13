@@ -12,7 +12,7 @@ void *memset(void *s, int c, unsigned long n) {
 // -----------------------------------------------------------------------
 // UART (for scheduler trace output)
 // -----------------------------------------------------------------------
-#define UART_ADDR 0x80000000UL
+#define UART_ADDR UART_BASE
 static void uart_putchar(char c) {
     *(volatile uint32_t*)UART_ADDR = (uint32_t)c;
 }
