@@ -1,12 +1,14 @@
-// program.c — Vajra Core preemptive scheduler demo
+// program.c — Vajra Core RTOS: task registration + boot
 //
-// Creates 3 tasks that each count independently.
-// The timer interrupt fires every TICK_INTERVAL clocks,
-// switches tasks, and you can see interleaved output on UART.
+// Creates 4 tasks:
+//   task_a     — counter upward,  prints every 500 iters
+//   task_b     — counter downward, prints every 500 iters
+//   task_c     — heartbeat every 1000 iters
+//   tinyml_task — 4×4 anomaly-detection inference, then exits cleanly
 
 #include "kernel.h"
 
-#define UART ((volatile unsigned int*)0x80000000)
+#define UART ((volatile unsigned int*)UART_BASE)
 
 static void uart_puts(const char *s) {
     while (*s) *UART = (unsigned int)*s++;
@@ -16,7 +18,7 @@ static void uart_put_dec(unsigned int n) {
     *UART = '0' + (n % 10);
 }
 
-// Task A — counts upward, prints every 500 iterations
+// Task A — counts upward
 static void task_a(void) {
     unsigned int count = 0;
     while (1) {
@@ -38,7 +40,7 @@ static void task_b(void) {
     }
 }
 
-// Task C — heartbeat every 1000 iterations
+// Task C — heartbeat
 static void task_c(void) {
     unsigned int count = 0;
     while (1) {
@@ -49,12 +51,13 @@ static void task_c(void) {
     }
 }
 
-// main — create tasks, start OS (never returns)
+// main — register tasks, start RTOS (never returns)
 int main(void) {
-    uart_puts("[boot] Vajra Core RTOS\n");
+    uart_puts("[boot] Vajra Core RTOS — TinyML Edition\n");
     task_create(task_a);
     task_create(task_b);
     task_create(task_c);
+    task_create(tinyml_task);  // inference task runs once then yields
     os_start();
     return 0;
 }
